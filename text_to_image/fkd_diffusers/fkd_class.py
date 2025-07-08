@@ -155,6 +155,7 @@ class FKD:
                     self.product_of_potentials[indices] * w[indices]
                 )
             else:
+                print(f"ESS: {ess}")
                 # No resampling
                 resampled_images = population_images
                 resampled_latents = latents

@@ -2,10 +2,18 @@
 Utility functions for the FKD pipeline.
 """
 import torch
-from diffusers import DDIMScheduler
+from diffusers import DDIMScheduler, VQModel
+from transformers import (
+    CLIPTextModelWithProjection,
+    CLIPTokenizer,
+)
 
 from fkd_pipeline_sdxl import FKDStableDiffusionXL
 from fkd_pipeline_sd import FKDStableDiffusion
+from fkd_pipeline_meissonic import FKDMeissonic
+
+from meissonic.transformer import Transformer2DModel
+from meissonic.scheduler import Scheduler
 
 from fkd_diffusers.rewards import (
     do_clip_score,
@@ -28,10 +36,28 @@ def get_model(model_name):
         pipeline = FKDStableDiffusion.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float16)
     elif model_name == "stable-diffusion-2-1":
         pipeline = FKDStableDiffusion.from_pretrained("stabilityai/stable-diffusion-2-1", torch_dtype=torch.float16)
+    elif model_name == "meissonic":
+        model_path = "MeissonFlow/Meissonic"
+        model = Transformer2DModel.from_pretrained(model_path,subfolder="transformer")
+        vq_model = VQModel.from_pretrained(model_path, subfolder="vqvae")
+        text_encoder = CLIPTextModelWithProjection.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
+        tokenizer = CLIPTokenizer.from_pretrained(model_path,subfolder="tokenizer")
+        scheduler = Scheduler.from_pretrained(model_path,subfolder="scheduler")
+        pipeline = FKDMeissonic(vq_model, tokenizer=tokenizer,text_encoder=text_encoder,transformer=model,scheduler=scheduler)
+    elif model_name == "meissonic-fp16-monetico":
+        dtype = torch.bfloat16
+        model_path = "Collov-Labs/Monetico"
+        model = Transformer2DModel.from_pretrained(model_path, subfolder="transformer", torch_dtype=dtype)
+        vq_model = VQModel.from_pretrained(model_path, subfolder="vqvae", torch_dtype=dtype)
+        text_encoder = CLIPTextModelWithProjection.from_pretrained(model_path, subfolder="text_encoder", torch_dtype=dtype)
+        tokenizer = CLIPTokenizer.from_pretrained(model_path, subfolder="tokenizer", torch_dtype=dtype)
+        scheduler = Scheduler.from_pretrained(model_path, subfolder="scheduler", torch_dtype=dtype)
+        pipeline = FKDMeissonic(vq_model, tokenizer=tokenizer, text_encoder=text_encoder, transformer=model, scheduler=scheduler)
     else:
         raise ValueError(f"Unknown model name: {model_name}")
     
-    pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
+    if model_name not in ["meissonic", "meissonic-fp16-monetico"]:
+        pipeline.scheduler = DDIMScheduler.from_config(pipeline.scheduler.config)
     
     return pipeline
 
