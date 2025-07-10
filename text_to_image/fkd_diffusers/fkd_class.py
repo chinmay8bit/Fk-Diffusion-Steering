@@ -9,6 +9,17 @@ from typing import Callable, Optional, Tuple
 import logging
 
 
+def systematic_multinomial(weights: torch.Tensor, num_samples: int):
+    P = weights / weights.sum()
+    # CDF
+    cdf = torch.cumsum(P, dim=0)
+    # generate the N equally spaced positions
+    u0 = torch.rand(1, device=weights.device, dtype=weights.dtype) / num_samples
+    u = u0 + torch.arange(num_samples, device=weights.device, dtype=weights.dtype) / num_samples
+    # searchsorted to get indices
+    return torch.searchsorted(cdf, u).to(torch.long)
+
+
 class PotentialType(Enum):
     DIFF = "diff"
     MAX = "max"
@@ -106,6 +117,7 @@ class FKD:
         # Decode latents to population images and compute rewards
         population_images = self.latent_to_decode_fn(x0_preds)
         rs_candidates = self.reward_fn(population_images)
+        print(f"Rewards at timestep {sampling_idx}: {rs_candidates}")
 
         # Compute importance weights
         if self.potential_type == PotentialType.MAX:
@@ -141,9 +153,11 @@ class FKD:
             if ess < 0.5 * self.num_particles:
                 print(f"Resampling at timestep {sampling_idx} with ESS: {ess}")
                 # Resample indices based on weights
-                indices = torch.multinomial(
-                    w, num_samples=self.num_particles, replacement=True
-                )
+                # indices = torch.multinomial(
+                #     w, num_samples=self.num_particles, replacement=True
+                # )
+                # Systematic resampling has lower variance
+                indices = systematic_multinomial(w, num_samples=self.num_particles)
                 resampled_latents = latents[indices]
                 self.population_rs = rs_candidates[indices]
 
@@ -162,10 +176,13 @@ class FKD:
                 self.population_rs = rs_candidates
 
         else:
+            print(f"Resampling at timestep {sampling_idx}")
             # Resample indices based on weights
-            indices = torch.multinomial(
-                w, num_samples=self.num_particles, replacement=True
-            )
+            # indices = torch.multinomial(
+            #     w, num_samples=self.num_particles, replacement=True
+            # )
+            # Systematic resampling has lower variance
+            indices = systematic_multinomial(w, num_samples=self.num_particles)
             resampled_latents = latents[indices]
             self.population_rs = rs_candidates[indices]
 
