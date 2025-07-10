@@ -20,7 +20,9 @@ from fkd_diffusers.rewards import (
     do_clip_score_diversity,
     do_image_reward,
     do_human_preference_score,
-    do_llm_grading
+    do_llm_grading,
+    do_pick_score,
+    do_aesthetic_score,
 )
 
 
@@ -119,7 +121,30 @@ def do_eval(*, prompt, images, metrics_to_compute):
         elif metric == "LLMGrader":
             results[metric] = {}
             out = do_llm_grading(images=images, prompts=prompt)
-            print(out)
+            results[metric]["result"] = out
+
+            results_arr = torch.tensor(results[metric]["result"])
+
+            results[metric]["mean"] = results_arr.mean().item()
+            results[metric]["std"] = results_arr.std().item()
+            results[metric]["max"] = results_arr.max().item()
+            results[metric]["min"] = results_arr.min().item()
+
+        elif metric == "PickScore":
+            results[metric] = {}
+            out = do_pick_score(images=images, prompts=prompt)
+            results[metric]["result"] = out
+
+            results_arr = torch.tensor(results[metric]["result"])
+
+            results[metric]["mean"] = results_arr.mean().item()
+            results[metric]["std"] = results_arr.std().item()
+            results[metric]["max"] = results_arr.max().item()
+            results[metric]["min"] = results_arr.min().item()
+            
+        elif metric == "AestheticScore":
+            results[metric] = {}
+            out = do_aesthetic_score(images=images, prompts=prompt)
             results[metric]["result"] = out
 
             results_arr = torch.tensor(results[metric]["result"])

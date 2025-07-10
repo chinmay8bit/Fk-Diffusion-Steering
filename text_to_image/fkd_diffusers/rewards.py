@@ -6,12 +6,17 @@ import hpsv2
 
 from image_reward_utils import rm_load
 from llm_grading import LLMGrader
+from PickScore_scorer import PickScoreScorer
+from aesthetic_scorer import AestheticScorer
+
 
 # Stores the reward models
 REWARDS_DICT = {
     "Clip-Score": None,
     "ImageReward": None,
     "LLMGrader": None,
+    "PickScore": None,
+    "AestheticScore": None,
 }
 
 
@@ -30,6 +35,12 @@ def get_reward_function(reward_name, images, prompts, metric_to_chase="overall_s
 
     elif reward_name == "LLMGrader":
         return do_llm_grading(images=images, prompts=prompts, metric_to_chase=metric_to_chase)
+    
+    elif reward_name == "PickScore":
+        return do_pick_score(images=images, prompts=prompts)
+    
+    elif reward_name == "AestheticScore":
+        return do_aesthetic_score(images=images, prompts=prompts)
     
     else:
         raise ValueError(f"Unknown metric: {reward_name}")
@@ -114,6 +125,23 @@ def do_llm_grading(*, images, prompts, metric_to_chase="overall_score"):
     ]
     return llm_grading_result
 
+# Compute Pick Score
+def do_pick_score(*, images, prompts):
+    global REWARDS_DICT
+    if REWARDS_DICT["PickScore"] is None:
+        REWARDS_DICT["PickScore"] = PickScoreScorer(dtype=torch.float32, device="cuda")
+    with torch.no_grad():
+        pick_score_result = REWARDS_DICT["PickScore"](images, prompts)
+    return pick_score_result
+
+# Compute Aesthetic Score
+def do_aesthetic_score(*, images, prompts):
+    global REWARDS_DICT
+    if REWARDS_DICT["AestheticScore"] is None:
+        REWARDS_DICT["AestheticScore"] = AestheticScorer(dtype=torch.float32, device="cuda")
+    with torch.no_grad():
+        pick_score_result = REWARDS_DICT["AestheticScore"](images)
+    return pick_score_result
 
 '''
 @File       :   CLIPScore.py
