@@ -128,6 +128,7 @@ def main(args):
             guidance_reward_fn=args.guidance_reward_fn,
             potential_type=args.potential_type,
             num_x0_samples=args.num_x0_samples, # phi
+            use_log_impl=args.use_fkd_log_impl,
         )
 
         img_size = 1024 if args.model_name == "meissonic" else 512
@@ -140,6 +141,8 @@ def main(args):
             guidance_scale=9.0,
             num_inference_steps=fkd_args["time_steps"],
             fkd_args=fkd_args,
+            max_decode_batch_size=args.max_decode_batch_size,
+            max_reward_batch_size=args.max_reward_batch_size,
         )
         images = images[0]
         if args.use_smc:
@@ -249,6 +252,9 @@ def get_args():
     parser.add_argument("--resample_t_end", type=int, default=30)
     parser.add_argument("--potential_type", type=str, default="diff")
     parser.add_argument("--num_x0_samples", type=int, default=1, help="phi")
+    parser.add_argument("--use_fkd_log_impl", action="store_true")
+    parser.add_argument("--max_decode_batch_size", type=int, default=1000)
+    parser.add_argument("--max_reward_batch_size", type=int, default=1000)
 
     args = parser.parse_args()
 
