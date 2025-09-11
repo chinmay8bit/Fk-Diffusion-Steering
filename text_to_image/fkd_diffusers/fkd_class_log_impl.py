@@ -88,7 +88,7 @@ class FKD:
         self.population_rs = (
             torch.ones(self.num_particles, device=self.device) * reward_min_value
         )
-        self.product_of_potentials = torch.ones(self.num_particles).to(self.device)
+        self.log_product_of_potentials = torch.zeros(self.num_particles).to(self.device)
 
     def resample(
         self, *, sampling_idx: int, latents: torch.Tensor, x0_preds: torch.Tensor, x0_preds_multiple: Optional[torch.Tensor]= None
@@ -127,15 +127,15 @@ class FKD:
         # Compute importance weights
         if self.potential_type == PotentialType.MAX:
             rs_candidates = torch.max(rs_candidates, self.population_rs)
-            w = torch.exp(self.lmbda * rs_candidates)
+            log_w = self.lmbda * rs_candidates
         elif self.potential_type == PotentialType.ADD:
             rs_candidates = rs_candidates + self.population_rs
-            w = torch.exp(self.lmbda * rs_candidates)
+            log_w = self.lmbda * rs_candidates
         elif self.potential_type == PotentialType.DIFF:
             diffs = rs_candidates - self.population_rs
-            w = torch.exp(self.lmbda * diffs)
+            log_w = self.lmbda * diffs
         elif self.potential_type == PotentialType.RT:
-            w = torch.exp(self.lmbda * rs_candidates)
+            log_w = self.lmbda * rs_candidates
         else:
             raise ValueError(f"potential_type {self.potential_type} not recognized")
 
@@ -145,14 +145,13 @@ class FKD:
                 or self.potential_type == PotentialType.ADD
                 or self.potential_type == PotentialType.RT
             ):
-                w = torch.exp(self.lmbda * rs_candidates) / self.product_of_potentials
+                log_w = self.lmbda * rs_candidates - self.log_product_of_potentials
 
-        w = torch.clamp(w, 0, 1e10)
-        w[torch.isnan(w)] = 0.0
+        normalized_w = torch.softmax(log_w, dim=0)
+        print("Weights: ", normalized_w.tolist())
 
         if self.adaptive_resampling or sampling_idx == self.time_steps - 1:
             # compute effective sample size
-            normalized_w = w / w.sum()
             ess = 1.0 / (normalized_w.pow(2).sum())
 
             if ess < 0.5 * self.num_particles:
@@ -162,7 +161,7 @@ class FKD:
                 #     w, num_samples=self.num_particles, replacement=True
                 # )
                 # Systematic resampling has lower variance
-                indices = systematic_multinomial(w, num_samples=self.num_particles)
+                indices = systematic_multinomial(normalized_w, num_samples=self.num_particles)
                 resampled_latents = latents[indices]
                 self.population_rs = rs_candidates[indices]
 
@@ -170,8 +169,8 @@ class FKD:
                 resampled_images = population_images[indices]
 
                 # Update product of potentials; used for max and add potentials
-                self.product_of_potentials = (
-                    self.product_of_potentials[indices] * w[indices]
+                self.log_product_of_potentials = (
+                    self.log_product_of_potentials[indices] + log_w[indices]
                 )
             else:
                 print(f"ESS: {ess}")
@@ -187,7 +186,7 @@ class FKD:
             #     w, num_samples=self.num_particles, replacement=True
             # )
             # Systematic resampling has lower variance
-            indices = systematic_multinomial(w, num_samples=self.num_particles)
+            indices = systematic_multinomial(normalized_w, num_samples=self.num_particles)
             resampled_latents = latents[indices]
             self.population_rs = rs_candidates[indices]
 
@@ -195,8 +194,8 @@ class FKD:
             resampled_images = population_images[indices]
 
             # Update product of potentials; used for max and add potentials
-            self.product_of_potentials = (
-                self.product_of_potentials[indices] * w[indices]
+            self.log_product_of_potentials = (
+                self.log_product_of_potentials[indices] + log_w[indices]
             )
 
         return resampled_latents, resampled_images

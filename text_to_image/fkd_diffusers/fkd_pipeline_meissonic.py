@@ -26,6 +26,7 @@ from meissonic.transformer import Transformer2DModel
 
 # Added for FK Steering
 from fkd_class import FKD
+from fkd_class_log_impl import FKD as FKD_log_impl
 from rewards import get_reward_function
 
 
@@ -392,11 +393,21 @@ class FKDMeissonic(DiffusionPipeline):
             return out.reshape(B, N, *out.shape[1:]).permute(0, 2, 3, 4, 1) # Shape: (B, C, H, W, N)
         
         if fkd_args is not None and fkd_args['use_smc']:
-            fkd = FKD(
-                latent_to_decode_fn=batch_latent_to_decode,
-                reward_fn=batch_postprocess_and_apply_reward_fn,
-                **fkd_args,
-            )
+            if fkd_args['use_log_impl']:
+                # Added an equivalent log impl for numerically stable weight calculations
+                print("Using the FKD log implementation")
+                fkd = FKD_log_impl(
+                    latent_to_decode_fn=batch_latent_to_decode,
+                    reward_fn=batch_postprocess_and_apply_reward_fn,
+                    **fkd_args,
+                )
+            else:
+                print("Using the FKD original implementation")
+                fkd = FKD(
+                    latent_to_decode_fn=batch_latent_to_decode,
+                    reward_fn=batch_postprocess_and_apply_reward_fn,
+                    **fkd_args,
+                )
         
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, timestep in enumerate(self.scheduler.timesteps):

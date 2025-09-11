@@ -105,7 +105,7 @@ def main(args):
     n_samples = 0
     average_time = 0
 
-    for prompt_idx, item in enumerate(tqdm(prompt_data[:1])):
+    for prompt_idx, item in enumerate(tqdm(prompt_data)):
         prompt = [item["prompt"]] * args.num_particles
         start_time = datetime.now()
 
