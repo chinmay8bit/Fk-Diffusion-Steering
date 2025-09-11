@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import sys
+import math
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer
@@ -28,12 +29,51 @@ from fkd_class import FKD
 from rewards import get_reward_function
 
 
-EXAMPLE_DOC_STRING = """
-    Examples:
-        ```py
-        >>> image = pipe(prompt).images[0]
-        ```
-"""
+import torch
+from contextlib import nullcontext
+
+def batched_infer(inputs: torch.Tensor, fn, batch_size: int, device=None, no_grad=True):
+    """
+    Simple batched inference for torch.Tensor.
+    - inputs: Tensor with shape (N, ...)
+    - fn: callable taking a Tensor batch and returning a Tensor (batch_out, ...)
+    - batch_size: positive int
+    - device: optional torch.device to move batches to (defaults to inputs.device)
+    - no_grad: if True, runs fn under torch.no_grad()
+    Returns: concatenated tensor of all batch outputs (dim=0)
+    """
+    if not torch.is_tensor(inputs):
+        raise TypeError("inputs must be a torch.Tensor")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be > 0")
+
+    device = inputs.device if device is None else device
+    ctx = torch.no_grad() if no_grad else nullcontext()
+
+    outs = []
+    with ctx:
+        for i in range(0, inputs.size(0), batch_size):
+            batch = inputs[i : i + batch_size].to(device)
+            out = fn(batch)
+            if not torch.is_tensor(out):
+                raise TypeError("fn must return a torch.Tensor for each batch")
+            outs.append(out)
+
+    if len(outs) == 0:
+        # no items -> return empty tensor with appropriate dtype/device
+        return torch.empty((0,), device=device)
+    return torch.cat(outs, dim=0)
+
+
+def logmeanexp(x, dim=None, keepdim=False):
+    """Numerically stable log-mean-exp using torch.logsumexp."""
+    if dim is None:
+        x = x.view(-1)
+        dim = 0
+    # log-sum-exp with or without keeping the reduced dim
+    lse = torch.logsumexp(x, dim=dim, keepdim=keepdim)
+    # subtract log(N) to convert sum into mean (broadcasts correctly)
+    return lse - math.log(x.size(dim))
 
 
 def _prepare_latent_image_ids(batch_size, height, width, device, dtype):
@@ -87,7 +127,6 @@ class FKDMeissonic(DiffusionPipeline):
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor, do_normalize=False)
 
     @torch.no_grad()
-    @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
         prompt: Optional[Union[List[str], str]] = None,
@@ -112,6 +151,9 @@ class FKDMeissonic(DiffusionPipeline):
         micro_conditioning_aesthetic_score: int = 6,
         micro_conditioning_crop_coord: Tuple[int, int] = (0, 0),
         temperature: Union[int, Tuple[int, int], List[int]] = (2, 0),
+        
+        max_reward_batch_size: int = 1000,
+        max_decode_batch_size: int = 1000,
     ):
         """
         The call function to the pipeline for generation.
@@ -316,20 +358,43 @@ class FKDMeissonic(DiffusionPipeline):
             rewards = get_reward_function(
                 fkd_args["guidance_reward_fn"], 
                 images=imagesx, 
-                prompts=prompt, 
+                prompts=[prompt[0]] * len(imagesx), 
                 metric_to_chase=fkd_args.get("metric_to_chase", None)
             )
-
             return torch.tensor(rewards).to(x.device)
         
+        def batch_postprocess_and_apply_reward_fn(x: torch.Tensor):
+            B, C, H, W, N = x.shape
+            x = x.permute(0, 4, 1, 2, 3).reshape(B*N, C, H, W)
+            reward_batch_size = min(max_reward_batch_size, x.shape[0])
+            rewards: torch.Tensor = batched_infer(
+                inputs=x,
+                fn=lambda x_batch: postprocess_and_apply_reward_fn(x_batch),
+                batch_size=reward_batch_size,
+            )
+            # print("Rewards:", rewards.tolist())
+            rewards = rewards.reshape(B, N)
+            return logmeanexp(rewards, dim=-1)
+        
         print('Args:', fkd_args)
+        
+        def batch_latent_to_decode(x: torch.Tensor):
+            B, H, W, N = x.shape
+            x = x.permute(0, 3, 1, 2).reshape(B*N, H, W)
+            decode_batch_size = min(max_decode_batch_size, x.shape[0])
+            out: torch.Tensor = batched_infer(
+                inputs=x,
+                fn=lambda x_batch: latent_to_decode(
+                    model=self, output_type=output_type, latents=x_batch,
+                    batch_size=decode_batch_size, height=height, width=width,),
+                batch_size=decode_batch_size,
+            )
+            return out.reshape(B, N, *out.shape[1:]).permute(0, 2, 3, 4, 1) # Shape: (B, C, H, W, N)
+        
         if fkd_args is not None and fkd_args['use_smc']:
             fkd = FKD(
-                latent_to_decode_fn=lambda x: latent_to_decode(
-                    model=self, output_type=output_type, latents=x,
-                    batch_size=batch_size, height=height, width=width,
-                ),
-                reward_fn=postprocess_and_apply_reward_fn,
+                latent_to_decode_fn=batch_latent_to_decode,
+                reward_fn=batch_postprocess_and_apply_reward_fn,
                 **fkd_args,
             )
         
@@ -364,16 +429,18 @@ class FKDMeissonic(DiffusionPipeline):
                     timestep=timestep,
                     sample=latents,
                     generator=generator,
+                    num_original_samples=fkd_args['num_x0_samples'],
                 )
                 
                 # FK Steering Change
                 latents = step_dict['prev_sample']
-                x0_preds = step_dict['pred_original_sample']
+                # x0_preds = step_dict['pred_original_sample']
+                x0_preds_multiple = step_dict['pred_original_samples']
                 
                 # FK Steering Change
                 if fkd_args is not None and fkd_args['use_smc']:
                     latents, current_pop_images = fkd.resample(
-                        sampling_idx=i, latents=latents, x0_preds=x0_preds
+                        sampling_idx=i, latents=latents, x0_preds=x0_preds_multiple
                     )
 
                     # if current_pop_images is not None:

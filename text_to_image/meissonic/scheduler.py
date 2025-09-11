@@ -46,12 +46,17 @@ class SchedulerOutput(BaseOutput):
             Computed sample `(x_{t-1})` of previous timestep. `prev_sample` should be used as next model input in the
             denoising loop.
         pred_original_sample (`torch.Tensor` of shape `(batch_size, num_channels, height, width)` for images):
-            The predicted denoised sample `(x_{0})` based on the model output from the current timestep.
+            The predicted denoised sample `(x_{0})` based on the model output from the current timestep, which has been used to compute for `prev_sample`.
             `pred_original_sample` can be used to preview progress or for guidance.
+        pred_original_samples (`torch.Tensor` of shape `(batch_size, num_channels, height, width, num_original_samples)` for images):
+            The predicted denoised samples `(x_{0})` based on the model output from
+            the current timestep. This is used for FKD where multiple original samples are drawn to compute
+            expected reward.
     """
 
     prev_sample: torch.Tensor
     pred_original_sample: torch.Tensor = None
+    pred_original_samples: torch.Tensor = None  # For FKD: multiple original samples
 
 
 class Scheduler(SchedulerMixin, ConfigMixin):
@@ -89,6 +94,7 @@ class Scheduler(SchedulerMixin, ConfigMixin):
         starting_mask_ratio: int = 1,
         generator: Optional[torch.Generator] = None,
         return_dict: bool = True,
+        num_original_samples: int = 1,
     ) -> Union[SchedulerOutput, Tuple]:
         two_dim_input = sample.ndim == 3 and model_output.ndim == 4
 
@@ -97,18 +103,26 @@ class Scheduler(SchedulerMixin, ConfigMixin):
             sample = sample.reshape(batch_size, height * width)
             model_output = model_output.reshape(batch_size, codebook_size, height * width).permute(0, 2, 1)
 
-        unknown_map = sample == self.config.mask_token_id
+        unknown_map = sample == self.config.mask_token_id # Shape: (B, H*W)
 
-        probs = model_output.softmax(dim=-1)
+        probs = model_output.softmax(dim=-1) # Shape (B, H*W, C)
 
         device = probs.device
         probs_ = probs.to(generator.device) if generator is not None else probs  # handles when generator is on CPU
         if probs_.device.type == "cpu" and probs_.dtype != torch.float32:
             probs_ = probs_.float()  # multinomial is not implemented for cpu half precision
-        probs_ = probs_.reshape(-1, probs.size(-1))
-        pred_original_sample = torch.multinomial(probs_, 1, generator=generator).to(device=device)
-        pred_original_sample = pred_original_sample[:, 0].view(*probs.shape[:-1])
-        pred_original_sample = torch.where(unknown_map, pred_original_sample, sample)
+        probs_ = probs_.reshape(-1, probs.size(-1)) # Shape (B*H*W, C)
+        
+        # We draw multiple original samples (this is required for MC estimate of expected reward)
+        pred_original_samples = torch.multinomial(probs_, num_original_samples, generator=generator, replacement=True).to(device=device) # Shape: (B*H*W, N)
+        pred_original_samples = pred_original_samples.reshape(*probs.shape[:-1], num_original_samples) # Shape: (B, H*W, N)
+        pred_original_samples = torch.where(
+            unknown_map.unsqueeze(-1).expand(-1, -1, num_original_samples), 
+            pred_original_samples, 
+            sample.unsqueeze(-1).expand(-1, -1, num_original_samples)
+        )
+        # Only one of the original samples is used for calculating prev_sample
+        pred_original_sample = pred_original_samples[..., 0] # Shape: (B, H*W)
 
         if timestep == 0:
             prev_sample = pred_original_sample
@@ -144,11 +158,12 @@ class Scheduler(SchedulerMixin, ConfigMixin):
         if two_dim_input:
             prev_sample = prev_sample.reshape(batch_size, height, width)
             pred_original_sample = pred_original_sample.reshape(batch_size, height, width)
+            pred_original_samples = pred_original_samples.reshape(batch_size, height, width, num_original_samples)
 
         if not return_dict:
-            return (prev_sample, pred_original_sample)
+            return (prev_sample, pred_original_sample, pred_original_samples)
 
-        return SchedulerOutput(prev_sample, pred_original_sample)
+        return SchedulerOutput(prev_sample, pred_original_sample, pred_original_samples)
 
     def add_noise(self, sample, timesteps, generator=None):
         step_idx = (self.timesteps == timesteps).nonzero()

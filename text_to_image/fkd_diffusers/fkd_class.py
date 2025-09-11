@@ -91,7 +91,7 @@ class FKD:
         self.product_of_potentials = torch.ones(self.num_particles).to(self.device)
 
     def resample(
-        self, *, sampling_idx: int, latents: torch.Tensor, x0_preds: torch.Tensor
+        self, *, sampling_idx: int, latents: torch.Tensor, x0_preds: torch.Tensor, x0_preds_multiple: Optional[torch.Tensor]= None
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
         Perform resampling of particles if conditions are met.
@@ -115,8 +115,13 @@ class FKD:
             return latents, None
 
         # Decode latents to population images and compute rewards
-        population_images = self.latent_to_decode_fn(x0_preds)
-        rs_candidates = self.reward_fn(population_images)
+        if x0_preds_multiple is None:
+            population_images = self.latent_to_decode_fn(x0_preds)
+            rs_candidates = self.reward_fn(population_images)
+        else:
+            decoded_images = self.latent_to_decode_fn(x0_preds_multiple)
+            rs_candidates = self.reward_fn(decoded_images)
+            population_images = decoded_images[..., 0]
         print(f"Rewards at timestep {sampling_idx}: {rs_candidates}")
 
         # Compute importance weights
