@@ -12,7 +12,7 @@ from transformers import (
     AutoTokenizer,
 )
 
-from infini_gram.engine import InfiniGramEngine
+# from infini_gram.engine import InfiniGramEngine
 from transformers import AutoTokenizer
 
 MODELS = {}
