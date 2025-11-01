@@ -20,10 +20,11 @@ sys.path.append("fkd_diffusers")
 from fkd_diffusers.fkd_pipeline_sdxl import FKDStableDiffusionXL
 from fkd_diffusers.fkd_pipeline_sd import FKDStableDiffusion
 
-from fks_utils import do_eval
+from fks_utils import do_eval, get_model
 
 # load prompt data
 def load_geneval_metadata(prompt_path, max_prompts=None):
+    prompt_path = "prompt_files/" + prompt_path
     if prompt_path.endswith(".json"):
         with open(prompt_path, "r") as f:
             data = json.load(f)
@@ -62,42 +63,43 @@ def main(args):
     prompt_data = load_geneval_metadata(args.prompt_path)
 
     # configure pipeline
-    if "xl" in args.model_name and "dpo" not in args.model_name:
-        print("Using SDXL")
-        pipe = FKDStableDiffusionXL.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float16
-        )
-    elif "mhdang/dpo" in args.model_name and "xl" in args.model_name:
-        pipe = FKDStableDiffusionXL.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-1.0",
-            torch_dtype=torch.float16,
-            variant="fp16",
-            use_safetensors=True,
-        )
+    # if "xl" in args.model_name and "dpo" not in args.model_name:
+    #     print("Using SDXL")
+    #     pipe = FKDStableDiffusionXL.from_pretrained(
+    #         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float16
+    #     )
+    # elif "mhdang/dpo" in args.model_name and "xl" in args.model_name:
+    #     pipe = FKDStableDiffusionXL.from_pretrained(
+    #         "stabilityai/stable-diffusion-xl-base-1.0",
+    #         torch_dtype=torch.float16,
+    #         variant="fp16",
+    #         use_safetensors=True,
+    #     )
 
-        unet_id = "mhdang/dpo-sdxl-text2image-v1"
-        unet = UNet2DConditionModel.from_pretrained(
-            unet_id, subfolder="unet", torch_dtype=torch.float16
-        )
-        pipe.unet = unet
+    #     unet_id = "mhdang/dpo-sdxl-text2image-v1"
+    #     unet = UNet2DConditionModel.from_pretrained(
+    #         unet_id, subfolder="unet", torch_dtype=torch.float16
+    #     )
+    #     pipe.unet = unet
 
-    elif "mhdang/dpo" in args.model_name and "xl" not in args.model_name:
-        pipe = FKDStableDiffusion.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16
-        )
-        # load finetuned model
-        unet_id = "mhdang/dpo-sd1.5-text2image-v1"
-        unet = UNet2DConditionModel.from_pretrained(
-            unet_id, subfolder="unet", torch_dtype=torch.float16
-        )
-        pipe.unet = unet
-    else:
-        print("Using SD")
-        pipe = FKDStableDiffusion.from_pretrained(
-            args.model_name, torch_dtype=torch.float16
-        )
+    # elif "mhdang/dpo" in args.model_name and "xl" not in args.model_name:
+    #     pipe = FKDStableDiffusion.from_pretrained(
+    #         "runwayml/stable-diffusion-v1-5", torch_dtype=torch.float16
+    #     )
+    #     # load finetuned model
+    #     unet_id = "mhdang/dpo-sd1.5-text2image-v1"
+    #     unet = UNet2DConditionModel.from_pretrained(
+    #         unet_id, subfolder="unet", torch_dtype=torch.float16
+    #     )
+    #     pipe.unet = unet
+    # else:
+    #     print("Using SD")
+    #     pipe = FKDStableDiffusion.from_pretrained(
+    #         args.model_name, torch_dtype=torch.float16
+    #     )
 
-    pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+    # pipe.scheduler = DDIMScheduler.from_config(pipe.scheduler.config)
+    pipe = get_model(args.model_name)
 
     # set device
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -163,12 +165,25 @@ def main(args):
             potential_type=args.potential_type,
         )
 
-        images = pipe(
-            prompt,
-            num_inference_steps=args.num_inference_steps,
-            eta=args.eta,
-            fkd_args=fkd_args,
-        )
+        if args.model_name in ["meissonic", "meissonic-fp16-monetico"]:
+            img_size = 1024 if args.model_name == "meissonic" else 512
+            negative_prompt = "worst quality, low quality, low res, blurry, distortion, watermark, logo, signature, text, jpeg artifacts, signature, sketch, duplicate, ugly, identifying mark"
+            images = pipe(
+                prompt=prompt, 
+                # negative_prompt=[negative_prompt]*len(prompt),
+                height=img_size,
+                width=img_size,
+                guidance_scale=9.0,
+                num_inference_steps=fkd_args["time_steps"],
+                fkd_args=fkd_args,
+            )
+        else:
+            images = pipe(
+                prompt,
+                num_inference_steps=args.num_inference_steps,
+                eta=args.eta,
+                fkd_args=fkd_args,
+            )
         images = images[0]
         if args.use_smc:
             end_time = datetime.now()
@@ -281,51 +296,51 @@ def get_args():
     if args.prompt_path == "geneval_metadata.jsonl":
         args.save_individual_images = True
 
-    if args.model_idx % 4 == 0:
-        args.num_particles = 2
+    # if args.model_idx % 4 == 0:
+    #     args.num_particles = 2
 
-    elif args.model_idx % 4 == 1:
-        args.num_particles = 3
+    # elif args.model_idx % 4 == 1:
+    #     args.num_particles = 3
 
-    elif args.model_idx % 4 == 2:
-        args.num_particles = 4
+    # elif args.model_idx % 4 == 2:
+    #     args.num_particles = 4
 
-    elif args.model_idx % 4 == 3:
-        args.num_particles = 8
-    else:
-        raise ValueError("Unknown model index")
+    # elif args.model_idx % 4 == 3:
+    #     args.num_particles = 8
+    # else:
+    #     raise ValueError("Unknown model index")
 
-    if args.model_idx in [0, 1, 2, 3]: 
-        args.model_name = "stabilityai/stable-diffusion-2-1"
-        # assert False
+    # if args.model_idx in [0, 1, 2, 3]: 
+    #     args.model_name = "stabilityai/stable-diffusion-2-1"
+    #     # assert False
 
-    elif args.model_idx in [4, 5, 6, 7]:
-        args.model_name = "runwayml/stable-diffusion-v1-5"
+    # elif args.model_idx in [4, 5, 6, 7]:
+    #     args.model_name = "runwayml/stable-diffusion-v1-5"
 
-    elif args.model_idx in [8, 9, 10, 11]:
-        args.model_name = "stabilityai/stable-diffusion-xl-base-1.0"
-        # assert False
+    # elif args.model_idx in [8, 9, 10, 11]:
+    #     args.model_name = "stabilityai/stable-diffusion-xl-base-1.0"
+    #     # assert False
 
-    elif args.model_idx in [12, 13, 14, 15]:
-        args.model_name = "CompVis/stable-diffusion-v1-4"
-        # assert False
+    # elif args.model_idx in [12, 13, 14, 15]:
+    #     args.model_name = "CompVis/stable-diffusion-v1-4"
+    #     # assert False
 
-    elif args.model_idx in [99]:
-        args.model_name = "kvablack/ddpo-alignment"
-        args.num_particles = 4
+    # elif args.model_idx in [99]:
+    #     args.model_name = "kvablack/ddpo-alignment"
+    #     args.num_particles = 4
 
-    elif args.model_idx == 100:
-        args.model_name = "mhdang/dpo-sd1.5-text2image-v1"
-        args.num_particles = 4
+    # elif args.model_idx == 100:
+    #     args.model_name = "mhdang/dpo-sd1.5-text2image-v1"
+    #     args.num_particles = 4
 
-    elif args.model_idx == 101:
-        args.model_name = "mhdang/dpo-sdxl-text2image-v1"
-        args.num_particles = 4
+    # elif args.model_idx == 101:
+    #     args.model_name = "mhdang/dpo-sdxl-text2image-v1"
+    #     args.num_particles = 4
 
-    else:
-        raise ValueError(f"Unknown model index {args.model_idx}")
+    # else:
+    #     raise ValueError(f"Unknown model index {args.model_idx}")
 
-    args.output_dir = args.prompt_path.replace(".json", f"_outputs")
+    args.output_dir = args.prompt_path.replace(".jsonl", f"_outputs").replace(".json", f"_outputs")
 
     return args
 

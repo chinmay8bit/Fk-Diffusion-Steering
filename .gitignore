@@ -178,3 +178,7 @@ cython_debug/
 
 
 text_to_image/output/
+text_to_image/geneval_metadata_outputs/
+text_to_image/geneval_metadata_results/
+*.out
+text_to_image/geneval_metadata_results_best/

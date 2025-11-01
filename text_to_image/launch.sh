@@ -1,3 +1,14 @@
 #!/bin/bash
 
-python launch_eval_runs.py --use_smc --model_name='stabilityai/stable-diffusion-xl-base-1.0' --lmbda=10.0 --resample_frequency=20 --resample_t_start=20 --resample_t_end=80 --num_particles=4 --potential_type=max
+export HF_HOME="/vol/bitbucket/cp524/hf_cache"
+
+python launch_eval_runs_meissonic.py \
+  --use_smc \
+  --model_name='meissonic-fp16-monetico' \
+  --lmbda=2.0 \
+  --resample_frequency=10 \
+  --resample_t_start=10 \
+  --resample_t_end=80 \
+  --num_particles=16 \
+  --potential_type=max \
+  --guidance_reward_fn='ImageReward'

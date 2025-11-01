@@ -24,4 +24,34 @@ cd /vol/bitbucket/cp524/dev/papers_with_code/Fk-Diffusion-Steering/text_to_image
 export PYTHONUNBUFFERED=1
 
 # Run training notebook
-./launch.sh
+MODEL="meissonic-fp16-monetico"
+COMMON_ARGS=(
+  --model_name="$MODEL"
+  --num_inference_steps=100
+  --resample_frequency=10
+  --resample_t_start=10
+  --resample_t_end=90
+  --potential_type=max
+  --guidance_reward_fn=ImageReward
+  --metrics_to_compute='ImageReward#HumanPreference'
+  --use_fkd_log_impl
+  --use_smc
+  --max_decode_batch_size=16
+)
+
+
+for phi in 4 1; do
+  for LAMBDA in 50.0 10.0 4.0 2.0; do
+    for n in 2 4 8 16; do
+      if [[ "$phi" == 4 && "$LAMBDA" == 50.0 && "$n" == 2 ]]; then
+        continue
+      fi
+      echo "▶ Running SMC with ${n} particles, φ=${phi}, λ=${LAMBDA}"
+      python launch_eval_runs_meissonic.py \
+        "${COMMON_ARGS[@]}" \
+        --num_particles=$n \
+        --lmbda=$LAMBDA \
+        --num_x0_samples=$phi
+    done
+  done
+done
